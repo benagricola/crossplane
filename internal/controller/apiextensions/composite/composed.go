@@ -104,8 +104,13 @@ func (r *APIDryRunRenderer) Render(ctx context.Context, cp resource.Composite, c
 	cd.SetGenerateName(cp.GetLabels()[xcrd.LabelKeyNamePrefixForComposed] + "-")
 	cd.SetName(name)
 	cd.SetNamespace(namespace)
+
+	// Temporary slice used to store patch outputs when value transfer
+	// between individual patches is required.
+	tmp := []interface{}{}
+
 	for i, p := range t.Patches {
-		if err := p.Apply(cp, cd); err != nil {
+		if err := p.Apply(cp, cd, &tmp); err != nil {
 			return errors.Wrapf(err, errFmtPatch, i)
 		}
 	}

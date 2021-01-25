@@ -26,6 +26,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/utils/pointer"
 
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/fieldpath"
@@ -39,6 +40,7 @@ const (
 	errUndefinedPatchSet  = "cannot find PatchSet by name %s"
 	errInvalidPatchType   = "patch type %s is unsupported"
 
+	errFmtCombineTypeFailed            = "%s combine could not resolve"
 	errFmtConvertInputTypeNotSupported = "input type %s is not supported"
 	errFmtConversionPairNotSupported   = "conversion from %s to %s is not supported"
 	errFmtTransformAtIndex             = "transform at index %d returned error"
@@ -73,42 +75,65 @@ type CompositionSpec struct {
 	WriteConnectionSecretsToNamespace *string `json:"writeConnectionSecretsToNamespace,omitempty"`
 }
 
+// Explicit empty string triggers patches to temporary storage
+const combinerIdentifierString = ""
+
 // InlinePatchSets dereferences PatchSets and includes their patches inline. The
 // updated CompositionSpec should not be persisted to the API server.
-func (cs *CompositionSpec) InlinePatchSets() error {
+// Function is over cyclo limits due to added complexity from combine
+// functionality.
+func (cs *CompositionSpec) InlinePatchSets() error { //nolint:gocyclo
 	pn := make(map[string][]Patch)
+
 	for _, s := range cs.PatchSets {
-		for _, p := range s.Patches {
-			if p.Type == PatchTypePatchSet {
-				return errors.New(errPatchSetType)
-			}
-		}
 		pn[s.Name] = s.Patches
 	}
 
 	for i, r := range cs.Resources {
 		po := []Patch{}
-		for _, p := range r.Patches {
-			if p.Type != PatchTypePatchSet {
-				po = append(po, p)
+		for _, ps := range r.Patches {
+			if ps.Type != PatchTypePatchSet {
+				po = append(po, ps)
 				continue
 			}
-			if p.PatchSetName == nil {
-				return errors.Errorf(errRequiredField, "PatchSetName", p.Type)
+			if ps.PatchSetName == nil {
+				return errors.Errorf(errRequiredField, "PatchSetName", ps.Type)
 			}
-			ps, ok := pn[*p.PatchSetName]
+
+			p, ok := pn[*ps.PatchSetName]
 			if !ok {
-				return errors.Errorf(errUndefinedPatchSet, *p.PatchSetName)
+				return errors.Errorf(errUndefinedPatchSet, *ps.PatchSetName)
 			}
-			po = append(po, ps...)
+
+			needsCombine := ps.Combine.Type != ""
+
+			// Iterate all patches in the current set. Check validity, and
+			// override toFieldPath if user requested combination.
+			for _, sp := range p {
+				if sp.Type == PatchTypePatchSet {
+					return errors.New(errPatchSetType)
+				}
+				if needsCombine {
+					sp.ToFieldPath = pointer.StringPtr(combinerIdentifierString)
+				}
+				po = append(po, sp)
+			}
+
+			// Append the patchSet after its' member patches.
+			// Combination is triggered on the patchSet entry.
+			if needsCombine {
+				po = append(po, ps)
+			}
 		}
+
 		cs.Resources[i].Patches = po
 	}
 	return nil
 }
 
 // A PatchSet is a set of patches that can be reused from all resources within
-// a Composition.
+// a Composition. Additionally, a patchSet can combine the output of multiple
+// patches to a single output field.
 type PatchSet struct {
 	// Name of this PatchSet.
 	Name string `json:"name"`
@@ -226,56 +251,66 @@ type Patch struct {
 	// input to be transformed.
 	// +optional
 	Transforms []Transform `json:"transforms,omitempty"`
+
+	// Combine defines how multiple patches in a patchSet will be
+	// combined into a single output field.
+	// +optional
+	Combine Combine `json:"combine,omitempty"`
 }
 
 // Apply executes a patching operation between the from and to resources.
-func (c *Patch) Apply(from, to runtime.Object) error {
+// A temporary variable is passed in during reconciliation to store
+// any values that require combining.
+func (c *Patch) Apply(from, to runtime.Object, tmp *[]interface{}) error {
 	switch c.Type {
 	case PatchTypeFromCompositeFieldPath:
-		return c.applyFromCompositeFieldPatch(from, to)
+		value, err := c.applyFromCompositeFieldPatch(from, to)
+
+		if err != nil {
+			return err
+		}
+
+		if value != nil {
+			*tmp = append(*tmp, value)
+		}
+
+		return nil
 	case PatchTypePatchSet:
-		// Already resolved - nothing to do.
+		// Apply patch set, sourcing input from temporary storage written above.
+		return c.applyPatchSet(tmp, to)
 	}
 	return errors.Errorf(errInvalidPatchType, c.Type)
 }
 
-// applyFromCompositeFieldPatch patches the composed resource, using a source field
-// on the composite resource. Values may be transformed if any are defined on
-// the patch.
-func (c *Patch) applyFromCompositeFieldPatch(from, to runtime.Object) error { // nolint:gocyclo
-	// NOTE(benagricola): The cyclomatic complexity here is from error checking
-	// at each stage of the patching process, in addition to Apply methods now
-	// being responsible for checking the validity of their input fields
-	// (necessary because with multiple patch types, the input fields
-	// must be +optional).
-	if c.FromFieldPath == nil {
-		return errors.Errorf(errRequiredField, "FromFieldPath", c.Type)
-	}
-
-	// Default to patching the same field on the composed resource.
-	if c.ToFieldPath == nil {
-		c.ToFieldPath = c.FromFieldPath
-	}
-
-	fromMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(from)
-	if err != nil {
-		return err
-	}
-
-	in, err := fieldpath.Pave(fromMap).GetValue(*c.FromFieldPath)
-	if fieldpath.IsNotFound(err) {
-		// A composition may want to opportunistically patch from a field path
-		// that may or may not exist in the composite, for example by patching
-		// {fromFieldPath: metadata.labels, toFieldPath: metadata.labels}. We
-		// don't consider a reference to a non-existent path to be an issue; if
-		// the relevant toFieldPath is required by the composed resource we'll
-		// report that fact when we attempt to reconcile the composite.
+// applyPatchSet will take multiple values from temporary
+// storage and reduce them to a single value.
+func (c *Patch) applyPatchSet(from *[]interface{}, to runtime.Object) error { // nolint:gocyclo
+	// Sanity check: PatchSets will only be Apply()-ed if InlinePatchSets
+	// detected that there was a combination method set. If we fail this
+	// check, something went wrong (we added the PatchSet to the list
+	// of patches to apply without a Combine set).
+	if c.Combine.Type == "" {
 		return nil
 	}
+
+	// Always reset temporary values after attempting to combine
+	// A patchSet.
+	defer func() {
+		*from = []interface{}{}
+	}()
+
+	if c.ToFieldPath == nil {
+		return errors.Errorf(errRequiredField, "ToFieldPath", c.Type)
+	}
+
+	// Combine input values into a single output value
+	out, err := c.Combine.Combine(*from)
+
 	if err != nil {
 		return err
 	}
-	out := in
+
+	// Apply transforms to combined value
 	for i, f := range c.Transforms {
 		if out, err = f.Transform(out); err != nil {
 			return errors.Wrapf(err, errFmtTransformAtIndex, i)
@@ -294,6 +329,74 @@ func (c *Patch) applyFromCompositeFieldPatch(from, to runtime.Object) error { //
 		return err
 	}
 	return runtime.DefaultUnstructuredConverter.FromUnstructured(toMap, to)
+}
+
+// applyFromCompositeFieldPatch patches the composed resource, using a source field
+// on the composite resource. Values may be transformed if any are defined on
+// the patch.
+func (c *Patch) applyFromCompositeFieldPatch(from, to runtime.Object) (interface{}, error) { // nolint:gocyclo
+	// NOTE(benagricola): The cyclomatic complexity here is from error checking
+	// at each stage of the patching process, in addition to Apply methods now
+	// being responsible for checking the validity of their input fields
+	// (necessary because with multiple patch types, the input fields
+	// must be +optional).
+	if c.FromFieldPath == nil {
+		return nil, errors.Errorf(errRequiredField, "FromFieldPath", c.Type)
+	}
+
+	// Default to patching the same field on the composed resource.
+	if c.ToFieldPath == nil {
+		c.ToFieldPath = c.FromFieldPath
+	}
+
+	// If toFieldPath is the combiner identifier, just return the value
+	// we would've patched. Like a dry-run, but this is actually used to
+	// combine patches within a patch set.
+	modify := *c.ToFieldPath != combinerIdentifierString
+
+	fromMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(from)
+	if err != nil {
+		return nil, err
+	}
+
+	in, err := fieldpath.Pave(fromMap).GetValue(*c.FromFieldPath)
+	if fieldpath.IsNotFound(err) {
+		// A composition may want to opportunistically patch from a field path
+		// that may or may not exist in the composite, for example by patching
+		// {fromFieldPath: metadata.labels, toFieldPath: metadata.labels}. We
+		// don't consider a reference to a non-existent path to be an issue; if
+		// the relevant toFieldPath is required by the composed resource we'll
+		// report that fact when we attempt to reconcile the composite.
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	out := in
+	for i, f := range c.Transforms {
+		if out, err = f.Transform(out); err != nil {
+			return nil, errors.Wrapf(err, errFmtTransformAtIndex, i)
+		}
+	}
+
+	// If we don't want to modify the target object, just return
+	// the value. This will be stored in a temporary location by Apply()
+	if !modify {
+		return out, nil
+	}
+
+	if u, ok := to.(interface{ UnstructuredContent() map[string]interface{} }); ok {
+		return fieldpath.Pave(u.UnstructuredContent()).SetValue(*c.ToFieldPath, out), nil
+	}
+
+	toMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(to)
+	if err != nil {
+		return nil, err
+	}
+	if err := fieldpath.Pave(toMap).SetValue(*c.ToFieldPath, out); err != nil {
+		return nil, err
+	}
+	return nil, runtime.DefaultUnstructuredConverter.FromUnstructured(toMap, to)
 }
 
 // TransformType is type of the transform function to be chosen.
@@ -518,6 +621,57 @@ func (s *ConvertTransform) Resolve(input interface{}) (interface{}, error) {
 		return nil, errors.Errorf(errFmtConversionPairNotSupported, reflect.TypeOf(input).Kind().String(), s.ToType)
 	}
 	return f(input)
+}
+
+// CombineType is the type of the combine function to be chosen.
+type CombineType string
+
+// Accepted CombineTypes.
+const (
+	CombineTypeString CombineType = "string"
+)
+
+// A Combine turns multiple inputs into a single output.
+type Combine struct {
+	// Format the input using a Go format string. See
+	// https://golang.org/pkg/fmt/ for details.
+	// +optional
+	String *StringCombine `json:"string,omitempty"`
+
+	// Type of the combine to be run.
+	// +kubebuilder:validation:Enum=string
+	Type CombineType `json:"type"`
+}
+
+// Combine calls the appropriate Combiner.
+func (t *Combine) Combine(input []interface{}) (interface{}, error) {
+	var combiner interface {
+		Combine(input []interface{}) (interface{}, error)
+	}
+
+	switch t.Type {
+	case CombineTypeString:
+		combiner = t.String
+	default:
+		return nil, errors.Errorf(errFmtTypeNotSupported, string(t.Type))
+	}
+	if reflect.ValueOf(combiner).IsNil() {
+		return nil, errors.Errorf(errFmtConfigMissing, string(t.Type))
+	}
+	out, err := combiner.Combine(input)
+	return out, errors.Wrapf(err, errFmtCombineTypeFailed, string(t.Type))
+}
+
+// A StringCombine returns a single string given multiple inputs.
+type StringCombine struct {
+	// Format the inputs using a Go format string. See
+	// https://golang.org/pkg/fmt/ for details.
+	Format string `json:"fmt"`
+}
+
+// Combine runs the String combine.
+func (s *StringCombine) Combine(input []interface{}) (interface{}, error) {
+	return fmt.Sprintf(s.Format, input...), nil
 }
 
 // ConnectionDetail includes the information about the propagation of the connection

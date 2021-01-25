@@ -585,8 +585,9 @@ func TestPatchApply(t *testing.T) {
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
+			tmp := make([]interface{}, 1)
 			ncp := tc.args.cp.DeepCopyObject()
-			err := tc.args.patch.Apply(ncp, tc.args.cd)
+			err := tc.args.patch.Apply(ncp, tc.args.cd, &tmp)
 
 			if tc.want.cp != nil {
 				if diff := cmp.Diff(tc.want.cp, ncp); diff != "" {

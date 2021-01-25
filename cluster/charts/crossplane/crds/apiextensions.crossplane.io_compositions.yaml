@@ -54,7 +54,7 @@ spec:
               patchSets:
                 description: PatchSets define a named set of patches that may be included by any resource in this Composition. PatchSets cannot themselves refer to other PatchSets.
                 items:
-                  description: A PatchSet is a set of patches that can be reused from all resources within a Composition.
+                  description: A PatchSet is a set of patches that can be reused from all resources within a Composition. Additionally, a patchSet can combine the output of multiple patches to a single output field.
                   properties:
                     name:
                       description: Name of this PatchSet.
@@ -64,6 +64,26 @@ spec:
                       items:
                         description: Patch objects are applied between composite and composed resources. Their behaviour depends on the Type selected. The default Type, FromCompositeFieldPath, copies a value from the composite resource to the composed resource, applying any defined transformers.
                         properties:
+                          combine:
+                            description: Combine defines how multiple patches in a patchSet will be combined into a single output field.
+                            properties:
+                              string:
+                                description: Format the input using a Go format string. See https://golang.org/pkg/fmt/ for details.
+                                properties:
+                                  fmt:
+                                    description: Format the inputs using a Go format string. See https://golang.org/pkg/fmt/ for details.
+                                    type: string
+                                required:
+                                - fmt
+                                type: object
+                              type:
+                                description: Type of the combine to be run.
+                                enum:
+                                - string
+                                type: string
+                            required:
+                            - type
+                            type: object
                           fromFieldPath:
                             description: FromFieldPath is the path of the field on the upstream resource whose value to be used as input. Required when type is FromCompositeFieldPath.
                             type: string
@@ -166,6 +186,26 @@ spec:
                       items:
                         description: Patch objects are applied between composite and composed resources. Their behaviour depends on the Type selected. The default Type, FromCompositeFieldPath, copies a value from the composite resource to the composed resource, applying any defined transformers.
                         properties:
+                          combine:
+                            description: Combine defines how multiple patches in a patchSet will be combined into a single output field.
+                            properties:
+                              string:
+                                description: Format the input using a Go format string. See https://golang.org/pkg/fmt/ for details.
+                                properties:
+                                  fmt:
+                                    description: Format the inputs using a Go format string. See https://golang.org/pkg/fmt/ for details.
+                                    type: string
+                                required:
+                                - fmt
+                                type: object
+                              type:
+                                description: Type of the combine to be run.
+                                enum:
+                                - string
+                                type: string
+                            required:
+                            - type
+                            type: object
                           fromFieldPath:
                             description: FromFieldPath is the path of the field on the upstream resource whose value to be used as input. Required when type is FromCompositeFieldPath.
                             type: string
