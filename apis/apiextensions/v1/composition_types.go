@@ -132,7 +132,7 @@ func (cs *CompositionSpec) InlinePatchSets() error { //nolint:gocyclo
 }
 
 // A PatchSet is a set of patches that can be reused from all resources within
-// a Composition. Additionally, a patchSet can combine the output of multiple
+// a Composition. Additionally, a PatchSet can combine the output of multiple
 // patches to a single output field.
 type PatchSet struct {
 	// Name of this PatchSet.
@@ -237,9 +237,15 @@ type Patch struct {
 	// +optional
 	FromFieldPath *string `json:"fromFieldPath,omitempty"`
 
+	// Must validate user input on ToFieldPath.
+	// Do not allow the user to enter an empty string (rather than null),
+	// since that will force the Patch to be applied to a temporary
+	// location normally used for combining patchset values.
+
 	// ToFieldPath is the path of the field on the base resource whose value will
 	// be changed with the result of transforms. Leave empty if you'd like to
 	// propagate to the same path on the target resource.
+	// +kubebuilder:validation:Pattern:=.+
 	// +optional
 	ToFieldPath *string `json:"toFieldPath,omitempty"`
 
@@ -633,7 +639,7 @@ const (
 
 // A Combine turns multiple inputs into a single output.
 type Combine struct {
-	// Format the input using a Go format string. See
+	// Format the inputs using a Go format string. See
 	// https://golang.org/pkg/fmt/ for details.
 	// +optional
 	String *StringCombine `json:"string,omitempty"`

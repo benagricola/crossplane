@@ -54,7 +54,7 @@ spec:
               patchSets:
                 description: PatchSets define a named set of patches that may be included by any resource in this Composition. PatchSets cannot themselves refer to other PatchSets.
                 items:
-                  description: A PatchSet is a set of patches that can be reused from all resources within a Composition. Additionally, a patchSet can combine the output of multiple patches to a single output field.
+                  description: A PatchSet is a set of patches that can be reused from all resources within a Composition. Additionally, a PatchSet can combine the output of multiple patches to a single output field.
                   properties:
                     name:
                       description: Name of this PatchSet.
@@ -68,7 +68,7 @@ spec:
                             description: Combine defines how multiple patches in a patchSet will be combined into a single output field.
                             properties:
                               string:
-                                description: Format the input using a Go format string. See https://golang.org/pkg/fmt/ for details.
+                                description: Format the inputs using a Go format string. See https://golang.org/pkg/fmt/ for details.
                                 properties:
                                   fmt:
                                     description: Format the inputs using a Go format string. See https://golang.org/pkg/fmt/ for details.
@@ -92,6 +92,7 @@ spec:
                             type: string
                           toFieldPath:
                             description: ToFieldPath is the path of the field on the base resource whose value will be changed with the result of transforms. Leave empty if you'd like to propagate to the same path on the target resource.
+                            pattern: .+
                             type: string
                           transforms:
                             description: Transforms are the list of functions that are used as a FIFO pipe for the input to be transformed.
@@ -190,7 +191,7 @@ spec:
                             description: Combine defines how multiple patches in a patchSet will be combined into a single output field.
                             properties:
                               string:
-                                description: Format the input using a Go format string. See https://golang.org/pkg/fmt/ for details.
+                                description: Format the inputs using a Go format string. See https://golang.org/pkg/fmt/ for details.
                                 properties:
                                   fmt:
                                     description: Format the inputs using a Go format string. See https://golang.org/pkg/fmt/ for details.
@@ -214,6 +215,7 @@ spec:
                             type: string
                           toFieldPath:
                             description: ToFieldPath is the path of the field on the base resource whose value will be changed with the result of transforms. Leave empty if you'd like to propagate to the same path on the target resource.
+                            pattern: .+
                             type: string
                           transforms:
                             description: Transforms are the list of functions that are used as a FIFO pipe for the input to be transformed.

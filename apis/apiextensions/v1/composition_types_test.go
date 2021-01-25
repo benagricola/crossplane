@@ -231,6 +231,92 @@ func TestPatchTypeReplacement(t *testing.T) {
 				},
 			},
 		},
+		"CombinePatchSet": {
+			reason: "Should de-reference a referenced PatchSet with combine set",
+			args: args{
+				comp: CompositionSpec{
+					PatchSets: []PatchSet{
+						{
+							Name: "combine-fields",
+							Patches: []Patch{
+								{
+									Type:          PatchTypeFromCompositeFieldPath,
+									FromFieldPath: pointer.StringPtr("spec.fieldOne"),
+								},
+								{
+									Type:          PatchTypeFromCompositeFieldPath,
+									FromFieldPath: pointer.StringPtr("spec.fieldTwo"),
+								},
+							},
+						},
+						{
+							Name: "single-field",
+							Patches: []Patch{
+								{
+									Type:          PatchTypeFromCompositeFieldPath,
+									FromFieldPath: pointer.StringPtr("spec.fieldThree"),
+								},
+							},
+						},
+					},
+					Resources: []ComposedTemplate{
+						{
+							Patches: []Patch{
+								{
+									Type:         PatchTypePatchSet,
+									PatchSetName: pointer.StringPtr("combine-fields"),
+									ToFieldPath:  pointer.StringPtr("spec.forProvider.out"),
+									Combine: Combine{
+										Type: CombineTypeString,
+										String: &StringCombine{
+											Format: "%s: %s",
+										},
+									},
+								},
+								{
+									Type:         PatchTypePatchSet,
+									PatchSetName: pointer.StringPtr("single-field"),
+								},
+							},
+						},
+					},
+				},
+			},
+			want: want{
+				err: nil,
+				resources: []ComposedTemplate{
+					{
+						Patches: []Patch{
+							{
+								Type:          PatchTypeFromCompositeFieldPath,
+								FromFieldPath: pointer.StringPtr("spec.fieldOne"),
+								ToFieldPath:   pointer.StringPtr(combinerIdentifierString),
+							},
+							{
+								Type:          PatchTypeFromCompositeFieldPath,
+								FromFieldPath: pointer.StringPtr("spec.fieldTwo"),
+								ToFieldPath:   pointer.StringPtr(combinerIdentifierString),
+							},
+							{
+								Type:         PatchTypePatchSet,
+								PatchSetName: pointer.StringPtr("combine-fields"),
+								ToFieldPath:  pointer.StringPtr("spec.forProvider.out"),
+								Combine: Combine{
+									Type: CombineTypeString,
+									String: &StringCombine{
+										Format: "%s: %s",
+									},
+								},
+							},
+							{
+								Type:          PatchTypeFromCompositeFieldPath,
+								FromFieldPath: pointer.StringPtr("spec.fieldThree"),
+							},
+						},
+					},
+				},
+			},
+		},
 	}
 
 	for name, tc := range cases {
@@ -481,11 +567,13 @@ func TestPatchApply(t *testing.T) {
 		patch Patch
 		cp    *fake.Composite
 		cd    *fake.Composed
+		tmp   *[]interface{}
 	}
 	type want struct {
 		cp  *fake.Composite
 		cd  *fake.Composed
 		err error
+		tmp *[]interface{}
 	}
 
 	cases := map[string]struct {
@@ -550,6 +638,7 @@ func TestPatchApply(t *testing.T) {
 						"Test": "blah",
 					}},
 				},
+				tmp: &([]interface{}{}),
 				err: nil,
 			},
 		},
@@ -582,13 +671,91 @@ func TestPatchApply(t *testing.T) {
 				err: nil,
 			},
 		},
+		"ValidCompositeToTemporaryPatch": {
+			reason: "Should return the patch value rather than applying to target if toFieldPath is an empty string",
+			args: args{
+				patch: Patch{
+					Type:          PatchTypeFromCompositeFieldPath,
+					FromFieldPath: pointer.StringPtr("objectMeta.labels['Test']"),
+					ToFieldPath:   pointer.StringPtr(""),
+				},
+				cp: &fake.Composite{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "cp",
+						Labels: map[string]string{
+							"Test": "blah",
+						},
+					},
+					ConnectionDetailsLastPublishedTimer: lpt,
+				},
+				cd: &fake.Composed{
+					ObjectMeta: metav1.ObjectMeta{Name: "cd"},
+				},
+			},
+			want: want{
+				cd: &fake.Composed{
+					ObjectMeta: metav1.ObjectMeta{Name: "cd"},
+				},
+				tmp: &([]interface{}{"blah"}),
+				err: nil,
+			},
+		},
+		"PatchSetNoCombine": {
+			reason: "Should return no error if patchSet is no-op",
+			args: args{
+				patch: Patch{
+					Type:         PatchTypePatchSet,
+					PatchSetName: pointer.StringPtr("blah"),
+				},
+				cp: &fake.Composite{
+					ConnectionDetailsLastPublishedTimer: lpt,
+				},
+				cd: &fake.Composed{ObjectMeta: metav1.ObjectMeta{Name: "cd"}},
+			},
+			want: want{
+				err: nil,
+			},
+		},
+		"PatchSetCombineString": {
+			reason: "Should combine temporary values using string combine",
+			args: args{
+				patch: Patch{
+					Type:         PatchTypePatchSet,
+					PatchSetName: pointer.StringPtr("blah"),
+					ToFieldPath:  pointer.StringPtr("objectMeta.labels['Test']"),
+					Combine: Combine{
+						Type: CombineTypeString,
+						String: &StringCombine{
+							Format: "%s-%s",
+						},
+					},
+				},
+				tmp: &[]interface{}{
+					"test1",
+					"test2",
+				},
+				cp: &fake.Composite{
+					ConnectionDetailsLastPublishedTimer: lpt,
+				},
+				cd: &fake.Composed{ObjectMeta: metav1.ObjectMeta{Name: "cd"}},
+			},
+			want: want{
+				err: nil,
+				cd: &fake.Composed{
+					ObjectMeta: metav1.ObjectMeta{Name: "cd", Labels: map[string]string{
+						"Test": "test1-test2",
+					}},
+				},
+			},
+		},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			tmp := make([]interface{}, 1)
+			if tc.args.tmp == nil {
+				tc.args.tmp = &([]interface{}{})
+			}
 			ncp := tc.args.cp.DeepCopyObject()
-			err := tc.args.patch.Apply(ncp, tc.args.cd, &tmp)
-
+			err := tc.args.patch.Apply(ncp, tc.args.cd, tc.args.tmp)
 			if tc.want.cp != nil {
 				if diff := cmp.Diff(tc.want.cp, ncp); diff != "" {
 					t.Errorf("\n%s\nApply(cp): -want, +got:\n%s", tc.reason, diff)
@@ -597,6 +764,11 @@ func TestPatchApply(t *testing.T) {
 			if tc.want.cd != nil {
 				if diff := cmp.Diff(tc.want.cd, tc.args.cd); diff != "" {
 					t.Errorf("\n%s\nApply(cd): -want, +got:\n%s", tc.reason, diff)
+				}
+			}
+			if tc.want.tmp != nil {
+				if diff := cmp.Diff(tc.want.tmp, tc.args.tmp); diff != "" {
+					t.Errorf("\n%s\nApply(tmp): -want, +got:\n%s", tc.reason, diff)
 				}
 			}
 			if diff := cmp.Diff(tc.want.err, err, test.EquateErrors()); diff != "" {
