@@ -9,6 +9,9 @@ indent: true
 
 ## Revisions
 
+* 1.2 - Ben Agricola (@benagricola)
+  * Add [Advanced Composition](
+    #advanced-composition) with an example on the usage of combiner patch sets.
 * 1.1 - Ben Agricola (@benagricola)
   * Updated [Specify How Your Resource May Be Composed](
     #specify-how-your-resource-may-be-composed) with examples outlining how to
@@ -509,6 +512,120 @@ spec:
 > This allows a Composition to be a schemafied Kubernetes-native resource that
 > can be stored in and validated by the Kubernetes API server at authoring time
 > rather than invocation time.
+
+### Advanced Composition
+Even though Composition features are intentionally limited, there are some
+cases where more advanced functionality is necessary. Many of these involve
+pulling information from multiple sources to build out configuration for a
+resource.
+
+A good example of this is configuring
+[IRSA](
+  https://docs.aws.amazon.com/eks/latest/userguide/iam-roles-for-service-accounts.html) 
+for AWS's EKS service. To allow a `ServiceAccount` to assume an `IAMRole`,
+an operator would need to build a policy document to control role assumption
+(a single string field in the `IAMRole` parameters, `assumeRolePolicyDocument`)
+that contains multiple distinct values - an AWS account ID, an OIDC endpoint 
+URI (made up of a cluster ID and region), and a service account ID.
+
+Assuming a simple composite resource definition which takes `awsAccountId`,
+`eksClusterRegion` and `eksClusterId` as parameters, and where the user
+specifies a claim in the same namespace and with the same name as the
+service account that should be granted access, we could write a composition
+to implement an EKS assumable IAM role in the following manner:
+
+```yaml
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: role-eks-assumable
+  labels:
+    purpose: eks-assumable-role
+    provider: aws
+spec:
+  compositeTypeRef:
+    apiVersion: example.org/v1alpha1
+    kind: CompositeRole
+  patchSets:
+    - name: Description
+      patches:
+      - fromFieldPath: spec.parameters.description
+        toFieldPath: spec.forProvider.description
+        transforms:
+          - type: string
+            string:
+              fmt: "[CROSSPLANE] %s"
+
+    # Note that this PatchSet does not define any toFieldPath settings.
+    # When referenced with a combiner, the toFieldPath of each individual
+    # patch is not used, as the patches are reduced to a single value.
+    # The toFieldPath value set when the PatchSet is referenced is the
+    # target that will be written.
+    - name: AssumeRoleFields
+      patches:
+        # First 3 patches build up the Principal.Federated string
+        - fromFieldPath: spec.parameters.awsAccountId
+        - fromFieldPath: spec.parameters.eksClusterRegion
+        - fromFieldPath: spec.parameters.eksClusterId
+
+        # Next 2 patches build up the Condition string
+        - fromFieldPath: spec.parameters.eksClusterRegion
+        - fromFieldPath: spec.parameters.eksClusterId
+
+        # Last 2 patches configure the service account identifier
+        # from fields added by Crossplane to the Composite resource
+        - fromFieldPath: metadata.labels["crossplane.io/claim-namespace"]
+        - fromFieldPath: metadata.labels["crossplane.io/claim-name"]
+  resources:
+    - base:
+        apiVersion: identity.aws.crossplane.io/v1beta1
+        kind: IAMRole
+        spec:
+          deletionPolicy: Delete
+          forProvider:
+            maxSessionDuration: 3600
+      patches:
+        # Non combined PatchSet. Without a Combine specified, the
+        # patches in the set are simply dereferenced and applied
+        # individually, to their target field.
+        - type: PatchSet
+          patchSetName: Description
+
+        # Combined PatchSet. With a Combine specified, the Patches
+        # in the set are dereferenced individually, but are applied
+        # to a temporary location instead of the target object.
+        # The PatchSet itself is also dereferenced after its' member
+        # Patches, and when applied, will pull all values from the
+        # temporary location and combine them into the field at
+        # toFieldPath.
+        - type: PatchSet
+          patchSetName: AssumeRoleFields
+          toFieldPath: spec.forProvider.assumeRolePolicyDocument
+
+          # Use a string combiner, interpolating values in the
+          # order that the Patches are defined within the PatchSet.
+          combine:
+            type: string
+            string:
+              fmt: |
+                {
+                  "Version": "2012-10-17",
+                  "Statement": [
+                    {
+                      "Effect": "Allow",
+                      "Principal": {
+                        "Federated": "arn:aws:iam::%s:oidc-provider/oidc.eks.%s.amazonaws.com/id/%s"
+                      },
+                      "Action": "sts:AssumeRoleWithWebIdentity",
+                      "Condition": {
+                        "StringLike": {
+                          "oidc.eks.%s.amazonaws.com/id/%s:sub": "system:serviceaccount:%s:%s"
+                        }
+                      }
+                    }
+                  ]
+                }
+```
 
 ## Using Composite Resources
 
