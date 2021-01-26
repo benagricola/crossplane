@@ -33,22 +33,22 @@ import (
 )
 
 const (
-	errMathNoMultiplier   = "no input is given"
 	errMathInputNonNumber = "input is required to be a number for math transformer"
+	errMathNoMultiplier   = "no input is given"
 	errPatchSetType       = "a patch in a PatchSet cannot be of type PatchSet"
-	errRequiredField      = "%s is required by type %s"
-	errUndefinedPatchSet  = "cannot find PatchSet by name %s"
-	errInvalidPatchType   = "patch type %s is unsupported"
 
 	errFmtCombineTypeFailed            = "%s combine could not resolve"
+	errFmtConfigMissing                = "given type %s requires configuration"
 	errFmtConvertInputTypeNotSupported = "input type %s is not supported"
 	errFmtConversionPairNotSupported   = "conversion from %s to %s is not supported"
+	errFmtInvalidPatchType             = "patch type %s is unsupported"
+	errFmtMapNotFound                  = "key %s is not found in map"
+	errFmtMapTypeNotSupported          = "type %s is not supported for map transform"
 	errFmtTransformAtIndex             = "transform at index %d returned error"
 	errFmtTypeNotSupported             = "transform type %s is not supported"
-	errFmtConfigMissing                = "given type %s requires configuration"
 	errFmtTransformTypeFailed          = "%s transform could not resolve"
-	errFmtMapTypeNotSupported          = "type %s is not supported for map transform"
-	errFmtMapNotFound                  = "key %s is not found in map"
+	errFmtRequiredField                = "%s is required by type %s"
+	errFmtUndefinedPatchSet            = "cannot find PatchSet by name %s"
 )
 
 // CompositionSpec specifies the desired state of the definition.
@@ -97,12 +97,12 @@ func (cs *CompositionSpec) InlinePatchSets() error { //nolint:gocyclo
 				continue
 			}
 			if ps.PatchSetName == nil {
-				return errors.Errorf(errRequiredField, "PatchSetName", ps.Type)
+				return errors.Errorf(errFmtRequiredField, "PatchSetName", ps.Type)
 			}
 
 			p, ok := pn[*ps.PatchSetName]
 			if !ok {
-				return errors.Errorf(errUndefinedPatchSet, *ps.PatchSetName)
+				return errors.Errorf(errFmtUndefinedPatchSet, *ps.PatchSetName)
 			}
 
 			needsCombine := ps.Combine.Type != ""
@@ -233,18 +233,19 @@ type Patch struct {
 	Type PatchType `json:"type,omitempty"`
 
 	// FromFieldPath is the path of the field on the upstream resource whose value
-	// to be used as input. Required when type is FromCompositeFieldPath.
+	// is to be used as input. Required when type is FromCompositeFieldPath.
 	// +optional
 	FromFieldPath *string `json:"fromFieldPath,omitempty"`
 
 	// Must validate user input on ToFieldPath.
-	// Do not allow the user to enter an empty string (rather than null),
+	// Do not allow the user to enter an empty string (rather than nil),
 	// since that will force the Patch to be applied to a temporary
-	// location normally used for combining patchset values.
+	// location normally used for combining PatchSet values.
 
 	// ToFieldPath is the path of the field on the base resource whose value will
-	// be changed with the result of transforms. Leave empty if you'd like to
-	// propagate to the same path on the target resource.
+	// be changed with the result of transforms. Required when type is PatchSet
+	// and a Combine is configured. Leave empty when using other patch types to
+	// patch the same path on the target resource.
 	// +kubebuilder:validation:Pattern:=.+
 	// +optional
 	ToFieldPath *string `json:"toFieldPath,omitempty"`
@@ -258,8 +259,8 @@ type Patch struct {
 	// +optional
 	Transforms []Transform `json:"transforms,omitempty"`
 
-	// Combine defines how multiple patches in a patchSet will be
-	// combined into a single output field.
+	// Combine defines how multiple patches in a PatchSet are reduced into a single
+	// output field.
 	// +optional
 	Combine Combine `json:"combine,omitempty"`
 }
@@ -285,7 +286,7 @@ func (c *Patch) Apply(from, to runtime.Object, tmp *[]interface{}) error {
 		// Apply patch set, sourcing input from temporary storage written above.
 		return c.applyPatchSet(tmp, to)
 	}
-	return errors.Errorf(errInvalidPatchType, c.Type)
+	return errors.Errorf(errFmtInvalidPatchType, c.Type)
 }
 
 // applyPatchSet will take multiple values from temporary
@@ -294,19 +295,20 @@ func (c *Patch) applyPatchSet(from *[]interface{}, to runtime.Object) error { //
 	// Sanity check: PatchSets will only be Apply()-ed if InlinePatchSets
 	// detected that there was a combination method set. If we fail this
 	// check, something went wrong (we added the PatchSet to the list
-	// of patches to apply without a Combine set).
+	// of patches to apply without a Combine set), but since it would be
+	// a no-op anyway, just return nil and continue patching.
 	if c.Combine.Type == "" {
 		return nil
 	}
 
 	// Always reset temporary values after attempting to combine
-	// A patchSet.
+	// A PatchSet.
 	defer func() {
 		*from = []interface{}{}
 	}()
 
 	if c.ToFieldPath == nil {
-		return errors.Errorf(errRequiredField, "ToFieldPath", c.Type)
+		return errors.Errorf(errFmtRequiredField, "ToFieldPath", c.Type)
 	}
 
 	// Combine input values into a single output value
@@ -347,7 +349,7 @@ func (c *Patch) applyFromCompositeFieldPatch(from, to runtime.Object) (interface
 	// (necessary because with multiple patch types, the input fields
 	// must be +optional).
 	if c.FromFieldPath == nil {
-		return nil, errors.Errorf(errRequiredField, "FromFieldPath", c.Type)
+		return nil, errors.Errorf(errFmtRequiredField, "FromFieldPath", c.Type)
 	}
 
 	// Default to patching the same field on the composed resource.
@@ -355,9 +357,8 @@ func (c *Patch) applyFromCompositeFieldPatch(from, to runtime.Object) (interface
 		c.ToFieldPath = c.FromFieldPath
 	}
 
-	// If toFieldPath is the combiner identifier, just return the value
-	// we would've patched. Like a dry-run, but this is actually used to
-	// combine patches within a patch set.
+	// If toFieldPath is the combiner identifier, make sure we don't
+	// modify any destination object.
 	modify := *c.ToFieldPath != combinerIdentifierString
 
 	fromMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(from)
@@ -637,7 +638,10 @@ const (
 	CombineTypeString CombineType = "string"
 )
 
-// A Combine turns multiple inputs into a single output.
+// A Combine turns multiple input values into a single output.
+// When defined on a PatchSet containing multiple patches, it
+// will combine the output values of each Patch into a single
+// field.
 type Combine struct {
 	// Format the inputs using a Go format string. See
 	// https://golang.org/pkg/fmt/ for details.

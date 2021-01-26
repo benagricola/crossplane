@@ -65,7 +65,7 @@ spec:
                         description: Patch objects are applied between composite and composed resources. Their behaviour depends on the Type selected. The default Type, FromCompositeFieldPath, copies a value from the composite resource to the composed resource, applying any defined transformers.
                         properties:
                           combine:
-                            description: Combine defines how multiple patches in a patchSet will be combined into a single output field.
+                            description: Combine defines how multiple patches in a PatchSet are reduced into a single output field.
                             properties:
                               string:
                                 description: Format the inputs using a Go format string. See https://golang.org/pkg/fmt/ for details.
@@ -85,13 +85,13 @@ spec:
                             - type
                             type: object
                           fromFieldPath:
-                            description: FromFieldPath is the path of the field on the upstream resource whose value to be used as input. Required when type is FromCompositeFieldPath.
+                            description: FromFieldPath is the path of the field on the upstream resource whose value is to be used as input. Required when type is FromCompositeFieldPath.
                             type: string
                           patchSetName:
                             description: PatchSetName to include patches from. Required when type is PatchSet.
                             type: string
                           toFieldPath:
-                            description: ToFieldPath is the path of the field on the base resource whose value will be changed with the result of transforms. Leave empty if you'd like to propagate to the same path on the target resource.
+                            description: ToFieldPath is the path of the field on the base resource whose value will be changed with the result of transforms. Required when type is PatchSet and a Combine is configured. Leave empty when using other patch types to patch the same path on the target resource.
                             pattern: .+
                             type: string
                           transforms:
@@ -188,7 +188,7 @@ spec:
                         description: Patch objects are applied between composite and composed resources. Their behaviour depends on the Type selected. The default Type, FromCompositeFieldPath, copies a value from the composite resource to the composed resource, applying any defined transformers.
                         properties:
                           combine:
-                            description: Combine defines how multiple patches in a patchSet will be combined into a single output field.
+                            description: Combine defines how multiple patches in a PatchSet are reduced into a single output field.
                             properties:
                               string:
                                 description: Format the inputs using a Go format string. See https://golang.org/pkg/fmt/ for details.
@@ -208,13 +208,13 @@ spec:
                             - type
                             type: object
                           fromFieldPath:
-                            description: FromFieldPath is the path of the field on the upstream resource whose value to be used as input. Required when type is FromCompositeFieldPath.
+                            description: FromFieldPath is the path of the field on the upstream resource whose value is to be used as input. Required when type is FromCompositeFieldPath.
                             type: string
                           patchSetName:
                             description: PatchSetName to include patches from. Required when type is PatchSet.
                             type: string
                           toFieldPath:
-                            description: ToFieldPath is the path of the field on the base resource whose value will be changed with the result of transforms. Leave empty if you'd like to propagate to the same path on the target resource.
+                            description: ToFieldPath is the path of the field on the base resource whose value will be changed with the result of transforms. Required when type is PatchSet and a Combine is configured. Leave empty when using other patch types to patch the same path on the target resource.
                             pattern: .+
                             type: string
                           transforms:
