@@ -590,7 +590,8 @@ func TestPatchApply(t *testing.T) {
 				cp: &fake.Composite{
 					ConnectionDetailsLastPublishedTimer: lpt,
 				},
-				cd: &fake.Composed{ObjectMeta: metav1.ObjectMeta{Name: "cd"}},
+				cd:  &fake.Composed{ObjectMeta: metav1.ObjectMeta{Name: "cd"}},
+				tmp: &([]interface{}{}),
 			},
 			want: want{
 				err: errors.Errorf(errFmtRequiredField, "FromFieldPath", PatchTypeFromCompositeFieldPath),
@@ -605,7 +606,8 @@ func TestPatchApply(t *testing.T) {
 				cp: &fake.Composite{
 					ConnectionDetailsLastPublishedTimer: lpt,
 				},
-				cd: &fake.Composed{ObjectMeta: metav1.ObjectMeta{Name: "cd"}},
+				cd:  &fake.Composed{ObjectMeta: metav1.ObjectMeta{Name: "cd"}},
+				tmp: &([]interface{}{}),
 			},
 			want: want{
 				err: errors.Errorf(errFmtInvalidPatchType, "invalid-patchtype"),
@@ -631,6 +633,7 @@ func TestPatchApply(t *testing.T) {
 				cd: &fake.Composed{
 					ObjectMeta: metav1.ObjectMeta{Name: "cd"},
 				},
+				tmp: &([]interface{}{}),
 			},
 			want: want{
 				cd: &fake.Composed{
@@ -661,6 +664,7 @@ func TestPatchApply(t *testing.T) {
 				cd: &fake.Composed{
 					ObjectMeta: metav1.ObjectMeta{Name: "cd"},
 				},
+				tmp: &([]interface{}{}),
 			},
 			want: want{
 				cd: &fake.Composed{
@@ -691,6 +695,7 @@ func TestPatchApply(t *testing.T) {
 				cd: &fake.Composed{
 					ObjectMeta: metav1.ObjectMeta{Name: "cd"},
 				},
+				tmp: &([]interface{}{}),
 			},
 			want: want{
 				cd: &fake.Composed{
@@ -710,14 +715,15 @@ func TestPatchApply(t *testing.T) {
 				cp: &fake.Composite{
 					ConnectionDetailsLastPublishedTimer: lpt,
 				},
-				cd: &fake.Composed{ObjectMeta: metav1.ObjectMeta{Name: "cd"}},
+				cd:  &fake.Composed{ObjectMeta: metav1.ObjectMeta{Name: "cd"}},
+				tmp: &([]interface{}{}),
 			},
 			want: want{
 				err: nil,
 			},
 		},
 		"PatchSetCombineString": {
-			reason: "Should combine temporary values using string combine",
+			reason: "Should combine temporary values using string combine and reset temporary variables",
 			args: args{
 				patch: Patch{
 					Type:         PatchTypePatchSet,
@@ -746,14 +752,12 @@ func TestPatchApply(t *testing.T) {
 						"Test": "test1-test2",
 					}},
 				},
+				tmp: &([]interface{}{}),
 			},
 		},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			if tc.args.tmp == nil {
-				tc.args.tmp = &([]interface{}{})
-			}
 			ncp := tc.args.cp.DeepCopyObject()
 			err := tc.args.patch.Apply(ncp, tc.args.cd, tc.args.tmp)
 			if tc.want.cp != nil {
