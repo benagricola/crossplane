@@ -36,7 +36,7 @@ var (
 	runAsNonRoot             = true
 )
 
-func buildProviderDeployment(provider *pkgmetav1.Provider, revision v1.PackageRevision, cc *v1alpha1.ControllerConfig, namespace string) (*corev1.ServiceAccount, *appsv1.Deployment) { // nolint:interfacer,gocyclo
+func buildProviderDeployment(provider *pkgmetav1.Provider, revision v1.PackageRevision, cc *v1alpha1.ControllerConfig, namespace string) (*corev1.ServiceAccount, *appsv1.Deployment, bool) { // nolint:interfacer,gocyclo
 	s := &corev1.ServiceAccount{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            revision.GetName(),
@@ -44,6 +44,8 @@ func buildProviderDeployment(provider *pkgmetav1.Provider, revision v1.PackageRe
 			OwnerReferences: []metav1.OwnerReference{meta.AsController(meta.TypedReferenceTo(revision, v1.ProviderRevisionGroupVersionKind))},
 		},
 	}
+	// Whether to create the service account or not.
+	csa := true
 	pullPolicy := corev1.PullIfNotPresent
 	if revision.GetPackagePullPolicy() != nil {
 		pullPolicy = *revision.GetPackagePullPolicy()
@@ -113,6 +115,7 @@ func buildProviderDeployment(provider *pkgmetav1.Provider, revision v1.PackageRe
 		}
 		if cc.Spec.ServiceAccountName != nil {
 			d.Spec.Template.Spec.ServiceAccountName = *cc.Spec.ServiceAccountName
+			csa = false
 		}
 		if cc.Spec.NodeName != nil {
 			d.Spec.Template.Spec.NodeName = *cc.Spec.NodeName
@@ -151,5 +154,5 @@ func buildProviderDeployment(provider *pkgmetav1.Provider, revision v1.PackageRe
 			d.Spec.Template.Spec.Containers[0].Env = cc.Spec.Env
 		}
 	}
-	return s, d
+	return s, d, csa
 }

@@ -181,6 +181,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		}
 	}
 
+	// Without any subjects, a ClusterRoleBinding is pointless.
+	if len(subjects) < 1 {
+		// There's no need to requeue explicitly - we're watching all PRs.
+		return reconcile.Result{Requeue: false}, nil
+	}
+
 	n := roles.SystemClusterRoleName(pr.GetName())
 	ref := meta.AsController(meta.TypedReferenceTo(pr, v1.ProviderRevisionGroupVersionKind))
 	rb := &rbacv1.ClusterRoleBinding{

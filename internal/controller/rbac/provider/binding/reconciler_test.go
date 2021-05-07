@@ -140,7 +140,13 @@ func TestReconcile(t *testing.T) {
 								d.Spec.DesiredState = v1.PackageRevisionActive
 								return nil
 							}),
-							MockList: test.NewMockListFn(nil),
+							MockList: test.NewMockListFn(nil, func(o client.ObjectList) error {
+								l := o.(*corev1.ServiceAccountList)
+								l.Items = []corev1.ServiceAccount{{
+									ObjectMeta: metav1.ObjectMeta{OwnerReferences: []metav1.OwnerReference{{}}},
+								}}
+								return nil
+							}),
 						},
 						Applicator: resource.ApplyFn(func(context.Context, client.Object, ...resource.ApplyOption) error {
 							return errBoom
@@ -176,6 +182,35 @@ func TestReconcile(t *testing.T) {
 								l.Items = []corev1.ServiceAccount{{
 									ObjectMeta: metav1.ObjectMeta{OwnerReferences: []metav1.OwnerReference{{}}},
 								}}
+								return nil
+							}),
+						},
+						Applicator: resource.ApplyFn(func(context.Context, client.Object, ...resource.ApplyOption) error {
+							return nil
+						}),
+					}),
+				},
+			},
+			want: want{
+				r: reconcile.Result{Requeue: false},
+			},
+		},
+		"SuccessfulNoOp": {
+			reason: "We should not requeue when there are no Subjects for our ClusterRoleBindings.",
+			args: args{
+				mgr: &fake.Manager{},
+				opts: []ReconcilerOption{
+					WithClientApplicator(resource.ClientApplicator{
+						Client: &test.MockClient{
+							MockGet: test.NewMockGetFn(nil, func(o client.Object) error {
+								d := o.(*v1.ProviderRevision)
+								d.SetOwnerReferences([]metav1.OwnerReference{{}})
+								d.Spec.DesiredState = v1.PackageRevisionActive
+								return nil
+							}),
+							MockList: test.NewMockListFn(nil, func(o client.ObjectList) error {
+								l := o.(*corev1.ServiceAccountList)
+								l.Items = []corev1.ServiceAccount{}
 								return nil
 							}),
 						},
